@@ -59,6 +59,8 @@ public:
 void * run_thread(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
+
+    // splitting + map
     while ((*(mapReduceHandle->atomic_counter)).load() < mapReduceHandle->n_values_a_stage){
         int old_value = (*(mapReduceHandle->atomic_counter))++;
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
@@ -66,6 +68,8 @@ void * run_thread(void * context){
         mapReduceHandle->jobState.percentage = (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->n_values_a_stage;
         mapReduceHandle->all_keys.push_back(vec->back().first);
     }
+
+    // sort
     std::sort(vec->begin(),vec->end()); //Todo
 
 
@@ -92,10 +96,23 @@ void * run_thread(void * context){
             }
         }
     }
-
-
-
     return nullptr;
+}
+
+
+
+
+void split_reduce_save(void *context){
+    IntermediateVec intermediateVec;
+    auto* mapReduceHandle = (MapReduceHandle*) context;
+    while (!mapReduceHandle->shuffled_vec.empty()) {
+        pthread_mutex_lock(&mapReduceHandle->mutex); // lock the group mutex, st only one vector at a time
+        intermediateVec = mapReduceHandle->shuffled_vec.back();
+        mapReduceHandle->shuffled_vec.pop_back();
+        pthread_mutex_unlock(&mapReduceHandle->mutex);
+
+        mapReduceHandle->client.reduce(&intermediateVec, context);
+    }
 }
 
 void emit2 (K2* key, V2* value, void* context){
@@ -103,7 +120,9 @@ void emit2 (K2* key, V2* value, void* context){
     vec->push_back(IntermediatePair(key,value));
 }
 
-void emit3 (K3* key, V3* value, void* context);
+void emit3 (K3* key, V3* value, void* context){
+
+}
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
                             const InputVec& inputVec, OutputVec& outputVec,
