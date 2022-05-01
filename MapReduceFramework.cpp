@@ -174,4 +174,4 @@ void getJobState(JobHandle job, JobState* state);
 void closeJobHandle(JobHandle job);
 
 
-
+// todo check precentage
