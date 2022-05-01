@@ -24,7 +24,7 @@ public:
         for (int i = 0; i < multiThreadLevel; ++i) {
             threads[i] = (pthread_t*) malloc(sizeof(pthread_t));
         }
-        inputVecSize = inputVec.size();
+        n_values_a_stage = inputVec.size();
         location = 0;
 
         jobState.stage=UNDEFINED_STAGE;
@@ -44,22 +44,22 @@ public:
     InputVec inputVec;
     OutputVec& outputVec;
     pthread_mutex_t mutex;
-    int inputVecSize;
     int location; // The threads take care of the vec from index 0 to location
     std::atomic<int>* atomic_counter;
     std::map<K2*, IntermediateVec*> map;
     JobState jobState;
+    int n_values_a_stage;
 };
 
 
 void * run_thread(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
-    for (int i = 0; i < mapReduceHandle->inputVecSize; ++i) {
+    for (int i = 0; i < mapReduceHandle->n_values_a_stage; ++i) {
         int old_value = (*(mapReduceHandle->atomic_counter))++;
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
-        //todo jobState
+        mapReduceHandle->jobState.percentage = (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->n_values_a_stage;
     }
     std::sort(vec->begin(),vec->end()); //Todo
     auto barrier = new Barrier(mapReduceHandle->numThreads);
