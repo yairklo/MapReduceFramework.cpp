@@ -106,12 +106,14 @@ void split_reduce_save(void *context){
     IntermediateVec intermediateVec;
     auto* mapReduceHandle = (MapReduceHandle*) context;
     while (!mapReduceHandle->shuffled_vec.empty()) {
-        pthread_mutex_lock(&mapReduceHandle->mutex); // lock the group mutex, st only one vector at a time
+
+        // lock the group mutex, st only one vector at a time
+        pthread_mutex_lock(&mapReduceHandle->mutex);
         intermediateVec = mapReduceHandle->shuffled_vec.back();
         mapReduceHandle->shuffled_vec.pop_back();
         pthread_mutex_unlock(&mapReduceHandle->mutex);
 
-        mapReduceHandle->client.reduce(&intermediateVec, &mapReduceHandle->outputVec);
+        mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
     }
 }
 
@@ -121,7 +123,11 @@ void emit2 (K2* key, V2* value, void* context){
 }
 
 void emit3 (K3* key, V3* value, void* context){
-
+    auto* mapReduceHandle = (MapReduceHandle*) context;
+    std::pair<K3*,V3*> item {key,value};
+    pthread_mutex_lock(&mapReduceHandle->mutex);
+    mapReduceHandle->outputVec.push_back(item);
+    pthread_mutex_unlock(&mapReduceHandle->mutex);
 }
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
