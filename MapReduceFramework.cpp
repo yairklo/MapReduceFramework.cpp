@@ -51,7 +51,7 @@ public:
     std::map<K2*, IntermediateVec*> map;
     std::vector<IntermediateVec> intermediateVec;
     JobState jobState;
-    unsigned long long n_values_a_stage;
+    //unsigned long long n_values_a_stage;
     std::vector<K2*> all_keys;
     std::vector<IntermediateVec> shuffled_vec;
 };
@@ -61,11 +61,11 @@ void split_and_map(void * context){
     auto vec = new IntermediateVec();
 
     // splitting + map
-    while ((*(mapReduceHandle->atomic_counter)).load() < mapReduceHandle->n_values_a_stage){
+    while ((*(mapReduceHandle->atomic_counter)).load() < mapReduceHandle->inputVec.size()){
         int old_value = (*(mapReduceHandle->atomic_counter))++;
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
-        mapReduceHandle->jobState.percentage = (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->n_values_a_stage;
+        mapReduceHandle->jobState.percentage = (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->inputVec.size();
         mapReduceHandle->all_keys.push_back(vec->back().first);
     }
 
@@ -82,6 +82,7 @@ void split_and_map(void * context){
 void shuffle(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     *mapReduceHandle->is_shuffled = true;
+    mapReduceHandle->jobState.stage = SHUFFLE_STAGE;
     std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
     mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
 
@@ -100,14 +101,13 @@ void shuffle(void * context){
 void split_reduce_save(void *context){
     IntermediateVec intermediateVec;
     auto* mapReduceHandle = (MapReduceHandle*) context;
-    while (!mapReduceHandle->shuffled_vec.empty()) {
 
-        // lock the group mutex, st only one vector at a time
-        pthread_mutex_lock(&mapReduceHandle->mutex);
-        intermediateVec = mapReduceHandle->shuffled_vec.back();
-        mapReduceHandle->shuffled_vec.pop_back();
-        pthread_mutex_unlock(&mapReduceHandle->mutex);
-
+    mapReduceHandle->jobState.stage = REDUCE_STAGE;
+    mapReduceHandle->jobState.percentage = 0;
+    *mapReduceHandle->atomic_counter = 0;
+    while ((*(mapReduceHandle->atomic_counter)).load() < mapReduceHandle->shuffled_vec.size()){
+        int old_value = (*(mapReduceHandle->atomic_counter))++;
+        intermediateVec = mapReduceHandle->shuffled_vec[old_value];
         mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
     }
 }
@@ -115,6 +115,8 @@ void split_reduce_save(void *context){
 void * run_thread(void * context){
 
     auto * mapReduceHandle = (MapReduceHandle *) context;
+    mapReduceHandle->jobState.stage = MAP_STAGE;
+
     split_and_map(mapReduceHandle);
     auto barrier = new Barrier(mapReduceHandle->numThreads);
     barrier->barrier();
@@ -139,7 +141,7 @@ void emit3 (K3* key, V3* value, void* context){
     mapReduceHandle->outputVec.push_back(item);
     pthread_mutex_unlock(&mapReduceHandle->mutex);
     mapReduceHandle->jobState.percentage =
-            (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->n_values_a_stage;
+            (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->shuffled_vec.size();
 }
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
@@ -151,6 +153,7 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
             exit(1);
         }
     }
+    return mapReduceHandle;
 
 }
 
