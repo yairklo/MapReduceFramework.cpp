@@ -29,7 +29,7 @@ public:
         jobState.percentage=0;
 
         atomic_counter = 0;
-        n_pairs_3rd_stage = 0;
+        vectors_counter = 0;
 
         is_shuffled = false;
     }
@@ -48,13 +48,14 @@ public:
     OutputVec& outputVec;
     pthread_mutex_t mutex;
     std::atomic<int> atomic_counter;
-    std::atomic<int> n_pairs_3rd_stage;
+    std::atomic<int> vectors_counter;
     std::atomic<bool> is_shuffled;
     std::map<K2*, IntermediateVec*> map;
     std::vector<IntermediateVec> intermediateVec;
     JobState jobState;
     std::vector<K2*> all_keys;
     std::vector<IntermediateVec> shuffled_vec;
+    unsigned long num_pairs;
 };
 
 void split_and_map(void * context){
@@ -105,20 +106,21 @@ void shuffle(void * context){
         }
         mapReduceHandle->shuffled_vec.push_back(*vec);
     }
+    for (const IntermediateVec& vector: mapReduceHandle->shuffled_vec){
+        mapReduceHandle->num_pairs += vector.size();
+    }
 }
 
 
 void split_reduce_save(void *context){
     IntermediateVec intermediateVec;
     auto* mapReduceHandle = (MapReduceHandle*) context;
-    for (IntermediateVec vector: mapReduceHandle->shuffled_vec){
 
-    }
     mapReduceHandle->jobState.stage = REDUCE_STAGE;
     mapReduceHandle->jobState.percentage = 0;
-    mapReduceHandle->atomic_counter = 0;
-    while ((mapReduceHandle->atomic_counter).load() < mapReduceHandle->shuffled_vec.size()){
-        int old_value = (mapReduceHandle->atomic_counter)++;
+
+    while ((mapReduceHandle->vectors_counter).load() < mapReduceHandle->shuffled_vec.size()){
+        int old_value = (mapReduceHandle->vectors_counter)++; //todo problem of mutex
         intermediateVec = mapReduceHandle->shuffled_vec[old_value];
         mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
     }
@@ -136,7 +138,7 @@ void * run_thread(void * context){
     if (!mapReduceHandle->is_shuffled){
         shuffle(mapReduceHandle);
     }
-
+    mapReduceHandle->atomic_counter = 0;
     split_reduce_save(mapReduceHandle);
     return nullptr;
 }
@@ -151,9 +153,10 @@ void emit3 (K3* key, V3* value, void* context){
     std::pair<K3*,V3*> item {key,value};
     pthread_mutex_lock(&mapReduceHandle->mutex);
     mapReduceHandle->outputVec.push_back(item);
+    mapReduceHandle->atomic_counter++;
     pthread_mutex_unlock(&mapReduceHandle->mutex);
     mapReduceHandle->jobState.percentage =
-            100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->n_pairs_3rd_stage;
+            100*(float)(mapReduceHandle->atomic_counter).load()/mapReduceHandle->num_pairs;
 }
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
