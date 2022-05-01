@@ -55,8 +55,7 @@ public:
     std::vector<IntermediateVec> shuffled_vec;
 };
 
-
-void * run_thread(void * context){
+void split_and_map(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
 
@@ -77,30 +76,25 @@ void * run_thread(void * context){
     mapReduceHandle->intermediateVec.push_back(*vec);
     pthread_mutex_unlock(&mapReduceHandle->mutex);
 
-    auto barrier = new Barrier(mapReduceHandle->numThreads);
-    barrier->barrier();
+}
 
-    if (!mapReduceHandle->is_shuffled){
-        *mapReduceHandle->is_shuffled = true;
-        std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
-        mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
+void shuffle(void * context){
+    auto * mapReduceHandle = (MapReduceHandle *) context;
+    *mapReduceHandle->is_shuffled = true;
+    std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
+    mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
 
-        while (!mapReduceHandle->intermediateVec.empty()){
-            K2 * k = mapReduceHandle->all_keys.back();
-            mapReduceHandle->all_keys.pop_back();
+    while (!mapReduceHandle->intermediateVec.empty()){
+        K2 * k = mapReduceHandle->all_keys.back();
+        mapReduceHandle->all_keys.pop_back();
 
-            for (IntermediateVec  vector : mapReduceHandle->intermediateVec) {
-                if (k == vector.back().first){
+        for (IntermediateVec  vector : mapReduceHandle->intermediateVec) {
+            if (k == vector.back().first){
 
-                }
             }
         }
     }
-    return nullptr;
 }
-
-
-
 
 void split_reduce_save(void *context){
     IntermediateVec intermediateVec;
@@ -116,6 +110,27 @@ void split_reduce_save(void *context){
         mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
     }
 }
+
+
+
+void * run_thread(void * context){
+
+    auto * mapReduceHandle = (MapReduceHandle *) context;
+    split_and_map(mapReduceHandle);
+    auto barrier = new Barrier(mapReduceHandle->numThreads);
+    barrier->barrier();
+
+    if (!mapReduceHandle->is_shuffled){
+        shuffle(mapReduceHandle);
+    }
+
+    split_reduce_save(mapReduceHandle);
+    return nullptr;
+}
+
+
+
+
 
 void emit2 (K2* key, V2* value, void* context){
     auto * vec = (IntermediateVec *) context;
