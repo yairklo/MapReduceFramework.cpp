@@ -52,6 +52,7 @@ public:
     JobState jobState;
     unsigned long long n_values_a_stage;
     std::vector<K2*> all_keys;
+    std::vector<IntermediateVec> shuffled_vec;
 };
 
 
@@ -66,14 +67,30 @@ void * run_thread(void * context){
         mapReduceHandle->all_keys.push_back(vec->back().first);
     }
     std::sort(vec->begin(),vec->end()); //Todo
+
+
+    pthread_mutex_lock(&mapReduceHandle->mutex);
     mapReduceHandle->intermediateVec.push_back(*vec);
+    pthread_mutex_unlock(&mapReduceHandle->mutex);
+
     auto barrier = new Barrier(mapReduceHandle->numThreads);
     barrier->barrier();
+
     if (!mapReduceHandle->is_shuffled){
         *mapReduceHandle->is_shuffled = true;
         std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
         mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
 
+        while (!mapReduceHandle->intermediateVec.empty()){
+            K2 * k = mapReduceHandle->all_keys.back();
+            mapReduceHandle->all_keys.pop_back();
+
+            for (IntermediateVec  vector : mapReduceHandle->intermediateVec) {
+                if (k == vector.back().first){
+
+                }
+            }
+        }
     }
 
 
