@@ -81,17 +81,23 @@ void * run_thread(void * context){
         std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
         mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
 
-        while (!mapReduceHandle->intermediateVec.empty()){
+        while (!mapReduceHandle->all_keys.empty()){
             K2 * k = mapReduceHandle->all_keys.back();
             mapReduceHandle->all_keys.pop_back();
-
+            vec = new IntermediateVec();
             for (IntermediateVec  vector : mapReduceHandle->intermediateVec) {
-                if (k == vector.back().first){
-
+                while (k == vector.back().first){
+                    vec->push_back(vector.back());
+                    vector.pop_back();
+                    if (vector.empty()){
+                        break;
+                    }
                 }
             }
+            mapReduceHandle->shuffled_vec.push_back(*vec);
         }
     }
+
 
 
 
