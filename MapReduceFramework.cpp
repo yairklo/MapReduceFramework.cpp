@@ -28,6 +28,8 @@ public:
 
         jobState.stage=UNDEFINED_STAGE;
         jobState.percentage=0;
+        *atomic_counter = 0;
+        *is_shuffled = false;
     }
 
     ~MapReduceHandle(){
@@ -44,6 +46,7 @@ public:
     OutputVec& outputVec;
     pthread_mutex_t mutex;
     std::atomic<int>* atomic_counter;
+    std::atomic<bool>* is_shuffled;
     std::map<K2*, IntermediateVec*> map;
     JobState jobState;
     unsigned long long n_values_a_stage;
@@ -62,6 +65,9 @@ void * run_thread(void * context){
     std::sort(vec->begin(),vec->end()); //Todo
     auto barrier = new Barrier(mapReduceHandle->numThreads);
     barrier->barrier();
+    if (!mapReduceHandle->is_shuffled){
+        *mapReduceHandle->is_shuffled = true;
+    }
 
 
 
