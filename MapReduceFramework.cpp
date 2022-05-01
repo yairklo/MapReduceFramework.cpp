@@ -48,8 +48,10 @@ public:
     std::atomic<int>* atomic_counter;
     std::atomic<bool>* is_shuffled;
     std::map<K2*, IntermediateVec*> map;
+    std::vector<IntermediateVec> intermediateVec;
     JobState jobState;
     unsigned long long n_values_a_stage;
+    std::vector<K2*> all_keys;
 };
 
 
@@ -61,12 +63,17 @@ void * run_thread(void * context){
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
         mapReduceHandle->jobState.percentage = (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->n_values_a_stage;
+        mapReduceHandle->all_keys.push_back(vec->back().first);
     }
     std::sort(vec->begin(),vec->end()); //Todo
+    mapReduceHandle->intermediateVec.push_back(*vec);
     auto barrier = new Barrier(mapReduceHandle->numThreads);
     barrier->barrier();
     if (!mapReduceHandle->is_shuffled){
         *mapReduceHandle->is_shuffled = true;
+        std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
+        mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
+
     }
 
 
