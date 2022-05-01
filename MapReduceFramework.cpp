@@ -111,7 +111,7 @@ void split_reduce_save(void *context){
         mapReduceHandle->shuffled_vec.pop_back();
         pthread_mutex_unlock(&mapReduceHandle->mutex);
 
-        mapReduceHandle->client.reduce(&intermediateVec, context);
+        mapReduceHandle->client.reduce(&intermediateVec, &mapReduceHandle->outputVec);
     }
 }
 
