@@ -26,6 +26,9 @@ public:
         }
         inputVecSize = inputVec.size();
         location = 0;
+
+        jobState.stage=UNDEFINED_STAGE;
+        jobState.percentage=0;
     }
 
     ~MapReduceHandle(){
@@ -45,7 +48,7 @@ public:
     int location; // The threads take care of the vec from index 0 to location
     std::atomic<int>* atomic_counter;
     std::map<K2*, IntermediateVec*> map;
-
+    JobState jobState;
 };
 
 
