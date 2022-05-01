@@ -25,7 +25,6 @@ public:
             threads[i] = (pthread_t*) malloc(sizeof(pthread_t));
         }
         n_values_a_stage = inputVec.size();
-        location = 0;
 
         jobState.stage=UNDEFINED_STAGE;
         jobState.percentage=0;
@@ -44,18 +43,17 @@ public:
     InputVec inputVec;
     OutputVec& outputVec;
     pthread_mutex_t mutex;
-    int location; // The threads take care of the vec from index 0 to location
     std::atomic<int>* atomic_counter;
     std::map<K2*, IntermediateVec*> map;
     JobState jobState;
-    int n_values_a_stage;
+    unsigned long long n_values_a_stage;
 };
 
 
 void * run_thread(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
-    for (int i = 0; i < mapReduceHandle->n_values_a_stage; ++i) {
+    while ((*(mapReduceHandle->atomic_counter)).load() < mapReduceHandle->n_values_a_stage){
         int old_value = (*(mapReduceHandle->atomic_counter))++;
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
