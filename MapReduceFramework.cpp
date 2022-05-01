@@ -24,6 +24,7 @@ public:
         for (int i = 0; i < multiThreadLevel; ++i) {
             threads[i] = (pthread_t*) malloc(sizeof(pthread_t));
         }
+
         n_values_a_stage = inputVec.size();
 
         jobState.stage=UNDEFINED_STAGE;
@@ -111,8 +112,6 @@ void split_reduce_save(void *context){
     }
 }
 
-
-
 void * run_thread(void * context){
 
     auto * mapReduceHandle = (MapReduceHandle *) context;
@@ -128,10 +127,6 @@ void * run_thread(void * context){
     return nullptr;
 }
 
-
-
-
-
 void emit2 (K2* key, V2* value, void* context){
     auto * vec = (IntermediateVec *) context;
     vec->push_back(IntermediatePair(key,value));
@@ -143,6 +138,8 @@ void emit3 (K3* key, V3* value, void* context){
     pthread_mutex_lock(&mapReduceHandle->mutex);
     mapReduceHandle->outputVec.push_back(item);
     pthread_mutex_unlock(&mapReduceHandle->mutex);
+    mapReduceHandle->jobState.percentage =
+            (float)(mapReduceHandle->atomic_counter)->load()/(float)mapReduceHandle->n_values_a_stage;
 }
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
