@@ -142,7 +142,7 @@ void emit3 (K3* key, V3* value, void* context){
     mapReduceHandle->outputVec.push_back(item);
     pthread_mutex_unlock(&mapReduceHandle->mutex);
     mapReduceHandle->jobState.percentage =
-            100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->shuffled_vec.size();
+            100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->n_pairs_3rd_stage;
 }
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
@@ -161,3 +161,24 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
 void waitForJob(JobHandle job);
 void getJobState(JobHandle job, JobState* state);
 void closeJobHandle(JobHandle job);
+
+
+
+while (!mapReduceHandle->all_keys.empty()){
+K2 * k = mapReduceHandle->all_keys.back();
+mapReduceHandle->all_keys.pop_back();
+
+vec = new IntermediateVec();
+for (IntermediateVec  vector : mapReduceHandle->intermediateVec) {
+
+while (k == vector.back().first){
+vec->push_back(vector.back());
+vector.pop_back();
+if (vector.empty()){
+break;
+}
+}
+}
+mapReduceHandle->shuffled_vec.push_back(*vec);
+}
+}
