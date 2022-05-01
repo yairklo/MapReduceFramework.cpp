@@ -62,6 +62,7 @@ void * run_thread(void * context){
     std::sort(vec->begin(),vec->end()); //Todo
     auto barrier = new Barrier(mapReduceHandle->numThreads);
     barrier->barrier();
+    //todo
 
 
     return nullptr;
