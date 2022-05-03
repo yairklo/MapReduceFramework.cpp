@@ -58,13 +58,13 @@ public:
     unsigned long num_pairs;
 };
 
-void split_and_map(void * context){
+void thread_main(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
 
     // splitting + map
-    while ((mapReduceHandle->atomic_counter).load() < mapReduceHandle->inputVec.size()){
-        int old_value = (mapReduceHandle->atomic_counter)++;
+    int old_value;
+    while ((old_value = mapReduceHandle->atomic_counter+=1) <= mapReduceHandle->inputVec.size()){
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
         mapReduceHandle->jobState.percentage = 100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->inputVec.size();
@@ -111,7 +111,6 @@ void shuffle(void * context){
     }
 }
 
-
 void split_reduce_save(void *context){
     IntermediateVec intermediateVec;
     auto* mapReduceHandle = (MapReduceHandle*) context;
@@ -131,7 +130,7 @@ void * run_thread(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     mapReduceHandle->jobState.stage = MAP_STAGE;
 
-    split_and_map(mapReduceHandle);
+    thread_main(mapReduceHandle);
     auto barrier = new Barrier(mapReduceHandle->numThreads);
     barrier->barrier();
 
@@ -177,4 +176,11 @@ void getJobState(JobHandle job, JobState* state);
 void closeJobHandle(JobHandle job);
 
 
+//int main(){
+//    int x;
+//    std::atomic<int> trial(0);
+//    while((x=trial+=1)<=5){
+//        std::cout<<x<<std::endl;
+//    }
+//}
 // todo check precentage
