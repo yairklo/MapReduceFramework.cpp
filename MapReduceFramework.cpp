@@ -64,7 +64,7 @@ void thread_main(void * context){
 
     // splitting + map
     int old_value;
-    while ((old_value = mapReduceHandle->atomic_counter+=1) <= mapReduceHandle->inputVec.size()){
+    while ((old_value = mapReduceHandle->atomic_counter++) < mapReduceHandle->inputVec.size()){
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
         mapReduceHandle->jobState.percentage = 100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->inputVec.size();
@@ -89,7 +89,7 @@ void shuffle(void * context){
     mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
 
 
-    while (!mapReduceHandle->all_keys.empty()){
+    while (!mapReduceHandle->all_keys.empty()){ // only one thread here => no resource race, and it's kind
         K2 * k = mapReduceHandle->all_keys.back();
         mapReduceHandle->all_keys.pop_back();
 
@@ -118,8 +118,8 @@ void split_reduce_save(void *context){
     mapReduceHandle->jobState.stage = REDUCE_STAGE;
     mapReduceHandle->jobState.percentage = 0;
 
-    while ((mapReduceHandle->vectors_counter).load() < mapReduceHandle->shuffled_vec.size()){
-        int old_value = (mapReduceHandle->vectors_counter)++; //todo problem of mutex
+    int old_value;
+    while ((old_value=mapReduceHandle->vectors_counter++) < mapReduceHandle->shuffled_vec.size()){ // to avoid resource race problems
         intermediateVec = mapReduceHandle->shuffled_vec[old_value];
         mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
     }
@@ -171,16 +171,22 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
 
 }
 
-void waitForJob(JobHandle job);
-void getJobState(JobHandle job, JobState* state);
-void closeJobHandle(JobHandle job);
+void waitForJob(JobHandle job){}
+void getJobState(JobHandle job, JobState* state){
+    auto *mapReduceHandle = (MapReduceHandle*) job;
+    *state = mapReduceHandle->jobState;
+}
+void closeJobHandle(JobHandle job){
+//    waitForJob(job);
+//    pthread_exit()
+}
 
 
-//int main(){
+int main(){
 //    int x;
 //    std::atomic<int> trial(0);
 //    while((x=trial+=1)<=5){
 //        std::cout<<x<<std::endl;
 //    }
-//}
+}
 // todo check precentage
