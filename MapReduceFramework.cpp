@@ -17,7 +17,7 @@ public:
                     const InputVec& inputVec, OutputVec& outputVec,
                     int multiThreadLevel): client(client), inputVec(inputVec), outputVec(outputVec),
                     mutex(PTHREAD_MUTEX_INITIALIZER),waitForJobMutex(PTHREAD_MUTEX_INITIALIZER),
-                    state_mutex(PTHREAD_MUTEX_INITIALIZER){
+                    state_mutex(PTHREAD_MUTEX_INITIALIZER), barrier(multiThreadLevel){
 
         numThreads = multiThreadLevel;
         threads = (pthread_t**) malloc(sizeof(pthread_t*) * multiThreadLevel );
@@ -50,6 +50,8 @@ public:
     const MapReduceClient& client;
     InputVec inputVec;
     OutputVec& outputVec;
+
+    Barrier barrier;
 
     pthread_mutex_t mutex;
     pthread_mutex_t state_mutex;
@@ -156,8 +158,8 @@ void * run_thread(void * context){
     pthread_mutex_unlock(&mapReduceHandle->state_mutex);
 
     thread_main(mapReduceHandle);
-    auto barrier = new Barrier(mapReduceHandle->numThreads);
-    barrier->barrier();
+
+    mapReduceHandle->barrier.barrier();
 
     if (!mapReduceHandle->is_shuffled){
         shuffle(mapReduceHandle);
