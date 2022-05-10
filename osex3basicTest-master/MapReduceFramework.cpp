@@ -17,7 +17,7 @@ public:
                     const InputVec& inputVec, OutputVec& outputVec,
                     int multiThreadLevel): client(client), inputVec(inputVec), outputVec(outputVec),
                     mutex(PTHREAD_MUTEX_INITIALIZER),waitForJobMutex(PTHREAD_MUTEX_INITIALIZER),
-                    state_mutex(PTHREAD_MUTEX_INITIALIZER), barrier(multiThreadLevel){
+                    state_mutex(PTHREAD_MUTEX_INITIALIZER){
 
         numThreads = multiThreadLevel;
         threads = (pthread_t**) malloc(sizeof(pthread_t*) * multiThreadLevel );
@@ -51,15 +51,13 @@ public:
     InputVec inputVec;
     OutputVec& outputVec;
 
-    Barrier barrier;
-
     pthread_mutex_t mutex;
     pthread_mutex_t state_mutex;
     pthread_mutex_t waitForJobMutex;
 
     std::atomic<int> atomic_counter;
     std::atomic<int> vectors_counter;
-    std::atomic<int> is_shuffled;
+    std::atomic<bool> is_shuffled;
 
     std::map<K2*, IntermediateVec*> map;
     std::vector<IntermediateVec> intermediateVec;
@@ -71,7 +69,7 @@ public:
     unsigned long num_pairs;
 };
 
-void map_phase(void * context){
+void thread_main(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
 
@@ -99,7 +97,7 @@ void map_phase(void * context){
 
 void shuffle(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
-
+    mapReduceHandle->is_shuffled = true;
 
     pthread_mutex_lock(&mapReduceHandle->state_mutex);
     mapReduceHandle->jobState.stage = SHUFFLE_STAGE;
@@ -115,11 +113,14 @@ void shuffle(void * context){
         mapReduceHandle->all_keys.pop_back();
 
         auto vec = new IntermediateVec();
-        for (IntermediateVec vector : mapReduceHandle->intermediateVec) {
+        for (IntermediateVec  vector : mapReduceHandle->intermediateVec) {
 
-            while (!vector.empty() && k == vector.back().first){ // no need for mutex as only one thread is here
+            while (k == vector.back().first){ // no need for mutex as only one thread is here
                 vec->push_back(vector.back());
                 vector.pop_back();
+                if (vector.empty()){
+                    break;
+                }
             }
         }
         mapReduceHandle->shuffled_vec.push_back(*vec);
@@ -145,7 +146,7 @@ void split_reduce_save(void *context){
     }
 }
 
-void * thread_main(void * context){
+void * run_thread(void * context){
 
     auto * mapReduceHandle = (MapReduceHandle *) context;
 
@@ -154,16 +155,13 @@ void * thread_main(void * context){
     mapReduceHandle->jobState.percentage = 0;
     pthread_mutex_unlock(&mapReduceHandle->state_mutex);
 
-    map_phase(mapReduceHandle);
+    thread_main(mapReduceHandle);
+    auto barrier = new Barrier(mapReduceHandle->numThreads);
+    barrier->barrier();
 
-    mapReduceHandle->barrier.barrier();
-
-    if (!(mapReduceHandle->is_shuffled++)){
+    if (!mapReduceHandle->is_shuffled){
         shuffle(mapReduceHandle);
     }
-
-    mapReduceHandle->barrier.barrier();
-
     mapReduceHandle->atomic_counter = 0;
     split_reduce_save(mapReduceHandle);
     return nullptr;
@@ -193,7 +191,7 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
                             int multiThreadLevel){
     auto mapReduceHandle = new MapReduceHandle(client, inputVec, outputVec, multiThreadLevel);
     for (int i = 0; i < multiThreadLevel; ++i) {
-        if (pthread_create(mapReduceHandle->threads[i], NULL, thread_main, mapReduceHandle) != 0){
+        if (pthread_create(mapReduceHandle->threads[i], NULL, run_thread, mapReduceHandle) != 0){
             exit(1);
         }
     }
