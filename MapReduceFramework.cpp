@@ -11,6 +11,24 @@
 #include <Barrier.h>
 
 
+// todo remove
+
+class KChar : public K2, public K3 {
+public:
+    KChar(char c) : c(c) {}
+
+    virtual bool operator<(const K2 &other) const {
+        return c < static_cast<const KChar &>(other).c;
+    }
+
+    virtual bool operator<(const K3 &other) const {
+        return c < static_cast<const KChar &>(other).c;
+    }
+
+    char c;
+};
+// todo end to remove
+
 class MapReduceHandle{
 public:
     MapReduceHandle(const MapReduceClient& client,
@@ -57,7 +75,7 @@ public:
     pthread_mutex_t state_mutex;
     pthread_mutex_t waitForJobMutex;
 
-    std::atomic<int> atomic_counter;
+    std::atomic<unsigned long> atomic_counter;
     std::atomic<int> vectors_counter;
     std::atomic<int> is_shuffled;
 
@@ -75,17 +93,21 @@ void map_phase(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
     auto vec = new IntermediateVec();
 
-    // splitting + map
-    int old_value;
-    while ((old_value = mapReduceHandle->atomic_counter++) < mapReduceHandle->inputVec.size()){
+    //
+    unsigned long old_value;
+    while (true){
+        old_value = mapReduceHandle->atomic_counter++;
+        if(old_value >= mapReduceHandle->inputVec.size())
+            break;
+
         InputPair inputPair = mapReduceHandle->inputVec[old_value];
 
-        pthread_mutex_lock(&mapReduceHandle->state_mutex); // after mapping immediately update.
+        // after mapping immediately update state, and place vec in context's vector all_keys without resource race
+        pthread_mutex_lock(&mapReduceHandle->state_mutex);
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
-        mapReduceHandle->jobState.percentage = 100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->inputVec.size();
-        pthread_mutex_unlock(&mapReduceHandle->state_mutex);
-
+        mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->inputVec.size(); // each thread thattht reached here adds 1, not by atomic counter which might make weired things
         mapReduceHandle->all_keys.push_back(vec->back().first);
+        pthread_mutex_unlock(&mapReduceHandle->state_mutex);
     }
 
     // sort
@@ -100,17 +122,11 @@ void map_phase(void * context){
 void shuffle(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
 
-
-    pthread_mutex_lock(&mapReduceHandle->state_mutex);
-    mapReduceHandle->jobState.stage = SHUFFLE_STAGE;
-    mapReduceHandle->jobState.percentage = 0;
-    pthread_mutex_unlock(&mapReduceHandle->state_mutex);
-
     std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
     mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
 
 
-    while (!mapReduceHandle->all_keys.empty()){ // only one thread here => no resource race, and it's kind
+    while (!mapReduceHandle->all_keys.empty()){ // again, no resource race
         K2 * k = mapReduceHandle->all_keys.back();
         mapReduceHandle->all_keys.pop_back();
 
@@ -133,59 +149,70 @@ void split_reduce_save(void *context){
     IntermediateVec intermediateVec;
     auto* mapReduceHandle = (MapReduceHandle*) context;
 
-    pthread_mutex_lock(&mapReduceHandle->state_mutex);
-    mapReduceHandle->jobState.stage = REDUCE_STAGE;
-    mapReduceHandle->jobState.percentage = 0;
-    pthread_mutex_unlock(&mapReduceHandle->state_mutex);
-
-    int old_value;
-    while ((old_value=mapReduceHandle->vectors_counter++) < mapReduceHandle->shuffled_vec.size()){ // to avoid resource race problems
+    unsigned long old_value;
+    while (true) {
+        old_value = mapReduceHandle->vectors_counter++;
+        if (old_value >= mapReduceHandle->shuffled_vec.size()) // sanity: avoid resources race.
+            break;
         intermediateVec = mapReduceHandle->shuffled_vec[old_value];
-        mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
+        if(!intermediateVec.empty()) {
+            mapReduceHandle->client.reduce(&intermediateVec, mapReduceHandle);
+        }
     }
 }
-
+/**
+ * the program each thread follows.
+ * @param context
+ * @return
+ */
 void * thread_main(void * context){
 
     auto * mapReduceHandle = (MapReduceHandle *) context;
 
+    // update stage
     pthread_mutex_lock(&mapReduceHandle->state_mutex);
-    mapReduceHandle->jobState.stage = MAP_STAGE;
-    mapReduceHandle->jobState.percentage = 0;
+    if (mapReduceHandle->jobState.stage == UNDEFINED_STAGE){
+        mapReduceHandle->jobState.stage = MAP_STAGE;
+        mapReduceHandle->jobState.percentage = 0;
+    }
     pthread_mutex_unlock(&mapReduceHandle->state_mutex);
 
+    // enter map phase, where each thread pull values without repeats, apply map, sort the res and save res to in 'global vector'
     map_phase(mapReduceHandle);
 
+    // wait until all the values where pulled and mapped
     mapReduceHandle->barrier.barrier();
 
+    // make only one thread shuffle
     if (!(mapReduceHandle->is_shuffled++)){
+        mapReduceHandle->jobState.stage = SHUFFLE_STAGE;
         shuffle(mapReduceHandle);
+        mapReduceHandle->jobState.stage = REDUCE_STAGE;
+        mapReduceHandle->atomic_counter = 0;
     }
 
+    //wait for shuffle to end
     mapReduceHandle->barrier.barrier();
 
-    mapReduceHandle->atomic_counter = 0;
     split_reduce_save(mapReduceHandle);
     return nullptr;
 }
 
 void emit2 (K2* key, V2* value, void* context){
     auto * vec = (IntermediateVec *) context;
+
     vec->push_back(IntermediatePair(key,value));
 }
 
 void emit3 (K3* key, V3* value, void* context){
     auto* mapReduceHandle = (MapReduceHandle*) context;
+
     std::pair<K3*,V3*> item {key,value};
 
     pthread_mutex_lock(&mapReduceHandle->mutex);
     mapReduceHandle->outputVec.push_back(item);
-    mapReduceHandle->atomic_counter++;
+    mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->num_pairs;
     pthread_mutex_unlock(&mapReduceHandle->mutex);
-
-    pthread_mutex_lock(&mapReduceHandle->state_mutex);
-    mapReduceHandle->jobState.percentage = 100*(float)(mapReduceHandle->atomic_counter).load()/(float)mapReduceHandle->num_pairs;
-    pthread_mutex_unlock(&mapReduceHandle->state_mutex);
 }
 
 JobHandle startMapReduceJob(const MapReduceClient& client,
@@ -215,7 +242,6 @@ void getJobState(JobHandle job, JobState* state){// add mutex
     *state = mapReduceHandle->jobState;
     pthread_mutex_unlock(&mapReduceHandle->state_mutex);
 }
-
 
 void closeJobHandle(JobHandle job){
     waitForJob(job);
