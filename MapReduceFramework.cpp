@@ -4,36 +4,22 @@
 
 #include "MapReduceFramework.h"
 #include <pthread.h>
-#include <iostream>
 #include <map>
 #include <atomic>
 #include <algorithm>
+#include <utility>
 #include <Barrier.h>
 
 
-// todo remove
+bool order_relation_K2(K2* a,K2* b){return *a<*b;}
+bool order_relation_k2v2(std::pair<K2*,V2*> a,std::pair<K2*,V2*> b){return *a.first<*b.first;}
 
-class KChar : public K2, public K3 {
-public:
-    KChar(char c) : c(c) {}
-
-    virtual bool operator<(const K2 &other) const {
-        return c < static_cast<const KChar &>(other).c;
-    }
-
-    virtual bool operator<(const K3 &other) const {
-        return c < static_cast<const KChar &>(other).c;
-    }
-
-    char c;
-};
-// todo end to remove
 
 class MapReduceHandle{
 public:
     MapReduceHandle(const MapReduceClient& client,
-                    const InputVec& inputVec, OutputVec& outputVec,
-                    int multiThreadLevel): client(client), inputVec(inputVec), outputVec(outputVec),
+                    InputVec inputVec, OutputVec& outputVec,
+                    int multiThreadLevel): client(client), inputVec(std::move(inputVec)), outputVec(outputVec),
                     mutex(PTHREAD_MUTEX_INITIALIZER),waitForJobMutex(PTHREAD_MUTEX_INITIALIZER),
                     state_mutex(PTHREAD_MUTEX_INITIALIZER), barrier(multiThreadLevel){
 
@@ -80,7 +66,7 @@ public:
     std::atomic<int> is_shuffled;
 
     std::map<K2*, IntermediateVec*> map;
-    std::vector<IntermediateVec> intermediateVec;
+    std::vector<IntermediateVec> intermediateVectors;
 
     std::vector<K2*> all_keys;
     std::vector<IntermediateVec> shuffled_vec;
@@ -110,28 +96,33 @@ void map_phase(void * context){
         pthread_mutex_unlock(&mapReduceHandle->state_mutex);
     }
 
-    // sort
-    std::sort(vec->begin(),vec->end()); //Todo
+    // sort phase (by key)
+    std::sort(vec->begin(),vec->end(), order_relation_k2v2);
 
     pthread_mutex_lock(&mapReduceHandle->mutex);
-    mapReduceHandle->intermediateVec.push_back(*vec);
+    mapReduceHandle->intermediateVectors.push_back(*vec);
     pthread_mutex_unlock(&mapReduceHandle->mutex);
 
 }
-
+/**
+ * give vec<vec<*k2,*v2>> with the inner vec been sorted,output vec<vec<*k2,*v2>> grouped by k2
+ * @param context
+ */
 void shuffle(void * context){
     auto * mapReduceHandle = (MapReduceHandle *) context;
 
-    std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end());
-    mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end() ), mapReduceHandle->all_keys.end() );
+    // all the key values will be use to pull from each vector
+    std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end(), order_relation_K2);
+    mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end(),
+                                             order_relation_K2), mapReduceHandle->all_keys.end() );
 
 
-    while (!mapReduceHandle->all_keys.empty()){ // again, no resource race
+    while (!mapReduceHandle->all_keys.empty()){
         K2 * k = mapReduceHandle->all_keys.back();
         mapReduceHandle->all_keys.pop_back();
 
         auto vec = new IntermediateVec();
-        for (IntermediateVec vector : mapReduceHandle->intermediateVec) {
+        for (IntermediateVec vector : mapReduceHandle->intermediateVectors) {
 
             while (!vector.empty() && k == vector.back().first){ // no need for mutex as only one thread is here
                 vec->push_back(vector.back());
@@ -140,6 +131,8 @@ void shuffle(void * context){
         }
         mapReduceHandle->shuffled_vec.push_back(*vec);
     }
+
+
     for (const IntermediateVec& vector: mapReduceHandle->shuffled_vec){
         mapReduceHandle->num_pairs += vector.size();
     }
@@ -195,6 +188,11 @@ void * thread_main(void * context){
     mapReduceHandle->barrier.barrier();
 
     split_reduce_save(mapReduceHandle);
+
+    //wait for program to end
+    mapReduceHandle->barrier.barrier();
+
+    //terminate
     return nullptr;
 }
 
@@ -218,9 +216,10 @@ void emit3 (K3* key, V3* value, void* context){
 JobHandle startMapReduceJob(const MapReduceClient& client,
                             const InputVec& inputVec, OutputVec& outputVec,
                             int multiThreadLevel){
+
     auto mapReduceHandle = new MapReduceHandle(client, inputVec, outputVec, multiThreadLevel);
     for (int i = 0; i < multiThreadLevel; ++i) {
-        if (pthread_create(mapReduceHandle->threads[i], NULL, thread_main, mapReduceHandle) != 0){
+        if (pthread_create(mapReduceHandle->threads[i], nullptr, thread_main, mapReduceHandle) != 0){
             exit(1);
         }
     }
