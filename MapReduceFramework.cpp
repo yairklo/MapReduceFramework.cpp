@@ -30,6 +30,7 @@ public:
         jobState.percentage=0;
         atomic_counter = 0;
         vectors_counter = 0;
+        atomic_counter_map_pairs = 0;
         is_shuffled = false;
 
         threads = (pthread_t**) malloc(sizeof(pthread_t*) * multiThreadLevel );
@@ -63,6 +64,7 @@ public:
     pthread_mutex_t waitForJobMutex;
 
     std::atomic<unsigned long> atomic_counter;
+    std::atomic<unsigned long> atomic_counter_map_pairs;
     std::atomic<int> vectors_counter;
     std::atomic<int> is_shuffled;
 
@@ -94,7 +96,8 @@ void map_phase(void * context){
         // after mapping immediately update state, and place vec in context's vector all_keys without resource race
         pthread_mutex_lock(&mapReduceHandle->state_mutex);
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
-        mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->inputVec.size(); // each thread that reached here adds 1, not by atomic counter which might make weired things
+        mapReduceHandle->atomic_counter_map_pairs++;
+        mapReduceHandle->jobState.percentage = 100*mapReduceHandle->atomic_counter_map_pairs.load()/(float)mapReduceHandle->inputVec.size(); // each thread that reached here adds 1, not by atomic counter which might make weired things
         for (auto i: *vec)
             mapReduceHandle->all_keys.push_back(i.first);
         pthread_mutex_unlock(&mapReduceHandle->state_mutex);
@@ -134,10 +137,10 @@ void shuffle(void * context){
         //}
        // for (IntermediateVec vector : mapReduceHandle->intermediateVectors) {
 
-       while (!mapReduceHandle->intermediateVectors[i].empty() && is_same_k2_key(k,mapReduceHandle->intermediateVectors[i].back().first)){
-           vec->push_back(mapReduceHandle->intermediateVectors[i].back());
-           mapReduceHandle->intermediateVectors[i].pop_back();
-           mapReduceHandle->num_pairs += mapReduceHandle->intermediateVectors[i].size();
+        while (!mapReduceHandle->intermediateVectors[i].empty() && is_same_k2_key(k,mapReduceHandle->intermediateVectors[i].back().first)){
+            vec->push_back(mapReduceHandle->intermediateVectors[i].back());
+            mapReduceHandle->intermediateVectors[i].pop_back();
+           //mapReduceHandle->num_pairs += mapReduceHandle->intermediateVectors[i].size();
             }
         }
 
@@ -190,6 +193,7 @@ void * thread_main(void * context){
 
     // make only one thread shuffle
     if (!(mapReduceHandle->is_shuffled++)){
+        mapReduceHandle->jobState.percentage = 0;
         mapReduceHandle->jobState.stage = SHUFFLE_STAGE;
         shuffle(mapReduceHandle);
         mapReduceHandle->atomic_counter = 0;
@@ -220,7 +224,7 @@ void emit3 (K3* key, V3* value, void* context){
 
     pthread_mutex_lock(&mapReduceHandle->mutex);
     mapReduceHandle->outputVec.push_back(item);
-    mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->num_pairs;
+    mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->shuffled_vec.size();
     mapReduceHandle->cc++;
     pthread_mutex_unlock(&mapReduceHandle->mutex);
 }
