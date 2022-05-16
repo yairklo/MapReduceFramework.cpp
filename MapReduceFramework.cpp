@@ -9,8 +9,9 @@
 #include <algorithm>
 #include <utility>
 #include <Barrier.h>
+#include <iostream>
 
-
+bool is_same_k2_key(K2* a, K2* b){return (!(*a < *b) and !(*b < *a));} // are the equal
 bool order_relation_K2(K2* a,K2* b){return *a<*b;}
 bool order_relation_k2v2(std::pair<K2*,V2*> a,std::pair<K2*,V2*> b){return *a.first<*b.first;}
 
@@ -24,18 +25,18 @@ public:
                     state_mutex(PTHREAD_MUTEX_INITIALIZER), barrier(multiThreadLevel){
 
         numThreads = multiThreadLevel;
+
+        jobState.stage=UNDEFINED_STAGE;
+        jobState.percentage=0;
+        atomic_counter = 0;
+        vectors_counter = 0;
+        is_shuffled = false;
+
         threads = (pthread_t**) malloc(sizeof(pthread_t*) * multiThreadLevel );
         for (int i = 0; i < multiThreadLevel; ++i) {
             threads[i] = (pthread_t*) malloc(sizeof(pthread_t));
         }
 
-        jobState.stage=UNDEFINED_STAGE;
-        jobState.percentage=0;
-
-        atomic_counter = 0;
-        vectors_counter = 0;
-
-        is_shuffled = false;
     }
 
     ~MapReduceHandle(){
@@ -71,6 +72,8 @@ public:
     std::vector<K2*> all_keys;
     std::vector<IntermediateVec> shuffled_vec;
 
+    int cc; // todo remove
+
     JobState jobState;
     unsigned long num_pairs;
 };
@@ -91,8 +94,9 @@ void map_phase(void * context){
         // after mapping immediately update state, and place vec in context's vector all_keys without resource race
         pthread_mutex_lock(&mapReduceHandle->state_mutex);
         mapReduceHandle->client.map(inputPair.first, inputPair.second, vec);
-        mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->inputVec.size(); // each thread thattht reached here adds 1, not by atomic counter which might make weired things
-        mapReduceHandle->all_keys.push_back(vec->back().first);
+        mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->inputVec.size(); // each thread that reached here adds 1, not by atomic counter which might make weired things
+        for (auto i: *vec)
+            mapReduceHandle->all_keys.push_back(i.first);
         pthread_mutex_unlock(&mapReduceHandle->state_mutex);
     }
 
@@ -109,32 +113,40 @@ void map_phase(void * context){
  * @param context
  */
 void shuffle(void * context){
+    // all the key values will be use in order to pull from each vector from maximum to minimum key value
     auto * mapReduceHandle = (MapReduceHandle *) context;
 
-    // all the key values will be use to pull from each vector
+    // sort the keys
     std::sort(mapReduceHandle->all_keys.begin(),mapReduceHandle->all_keys.end(), order_relation_K2);
-    mapReduceHandle->all_keys.erase( unique( mapReduceHandle->all_keys.begin(), mapReduceHandle->all_keys.end(),
-                                             order_relation_K2), mapReduceHandle->all_keys.end() );
 
 
+    // for each key from largest to smallest:
     while (!mapReduceHandle->all_keys.empty()){
-        K2 * k = mapReduceHandle->all_keys.back();
+        // load key (and remove it from key-vector)
+        K2 *k = mapReduceHandle->all_keys.back();
+
         mapReduceHandle->all_keys.pop_back();
 
         auto vec = new IntermediateVec();
-        for (IntermediateVec vector : mapReduceHandle->intermediateVectors) {
+        // for each vector pull all the values with key = current max key.
+        for (int i = 0; i < mapReduceHandle->numThreads; ++i) {
 
-            while (!vector.empty() && k == vector.back().first){ // no need for mutex as only one thread is here
-                vec->push_back(vector.back());
-                vector.pop_back();
+        //}
+       // for (IntermediateVec vector : mapReduceHandle->intermediateVectors) {
+
+       while (!mapReduceHandle->intermediateVectors[i].empty() && is_same_k2_key(k,mapReduceHandle->intermediateVectors[i].back().first)){
+           vec->push_back(mapReduceHandle->intermediateVectors[i].back());
+           mapReduceHandle->intermediateVectors[i].pop_back();
+           mapReduceHandle->num_pairs += mapReduceHandle->intermediateVectors[i].size();
             }
         }
+
+        // if we finished with a certain key - push the vector with pairs of it.
         mapReduceHandle->shuffled_vec.push_back(*vec);
-    }
 
-
-    for (const IntermediateVec& vector: mapReduceHandle->shuffled_vec){
-        mapReduceHandle->num_pairs += vector.size();
+        //remove repeated values in sorted all_keys
+        while(!mapReduceHandle->all_keys.empty() && is_same_k2_key(k, mapReduceHandle->all_keys.back()))
+            mapReduceHandle->all_keys.pop_back();
     }
 }
 
@@ -165,8 +177,8 @@ void * thread_main(void * context){
     // update stage
     pthread_mutex_lock(&mapReduceHandle->state_mutex);
     if (mapReduceHandle->jobState.stage == UNDEFINED_STAGE){
-        mapReduceHandle->jobState.stage = MAP_STAGE;
         mapReduceHandle->jobState.percentage = 0;
+        mapReduceHandle->jobState.stage = MAP_STAGE;
     }
     pthread_mutex_unlock(&mapReduceHandle->state_mutex);
 
@@ -180,8 +192,8 @@ void * thread_main(void * context){
     if (!(mapReduceHandle->is_shuffled++)){
         mapReduceHandle->jobState.stage = SHUFFLE_STAGE;
         shuffle(mapReduceHandle);
-        mapReduceHandle->jobState.stage = REDUCE_STAGE;
         mapReduceHandle->atomic_counter = 0;
+        mapReduceHandle->jobState.stage = REDUCE_STAGE;
     }
 
     //wait for shuffle to end
@@ -189,10 +201,9 @@ void * thread_main(void * context){
 
     split_reduce_save(mapReduceHandle);
 
-    //wait for program to end
+    //wait for program to end todo kill it
     mapReduceHandle->barrier.barrier();
 
-    //terminate
     return nullptr;
 }
 
@@ -210,6 +221,7 @@ void emit3 (K3* key, V3* value, void* context){
     pthread_mutex_lock(&mapReduceHandle->mutex);
     mapReduceHandle->outputVec.push_back(item);
     mapReduceHandle->jobState.percentage += 100/(float)mapReduceHandle->num_pairs;
+    mapReduceHandle->cc++;
     pthread_mutex_unlock(&mapReduceHandle->mutex);
 }
 
@@ -231,6 +243,7 @@ void waitForJob(JobHandle job){
     auto *mapReduceHandle = (MapReduceHandle*) job;
     pthread_mutex_lock(&mapReduceHandle->waitForJobMutex);
     for (int i = 0; i < mapReduceHandle->numThreads; ++i) pthread_join(*(mapReduceHandle->threads[i]), nullptr);
+    mapReduceHandle->atomic_counter = 1;
     pthread_mutex_unlock(&mapReduceHandle->waitForJobMutex);
 }
 
